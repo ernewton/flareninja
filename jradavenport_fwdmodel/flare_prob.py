@@ -38,8 +38,7 @@ def SuperLC(ffd_alpha=1.0, ffd_beta=-2.0, dur=1.0, repeat=0, mag=False,
     # log ED limits: ffd_min, ffd_max
     '''
 
-    # 1 minute sampling, in units of days
-
+ 
     time = np.arange(0, dur * 365., dt)
     print('Making ' + str(len(time)) + ' epochs')
 
@@ -52,7 +51,7 @@ def SuperLC(ffd_alpha=1.0, ffd_beta=-2.0, dur=1.0, repeat=0, mag=False,
 
     # make some REALLY BAD assumptions from event energy to FWHM and Amplitude
     fwhm = (10**((np.log10(f_energies) + 0.5) / 1.5)) / 24. / 60.
-    ampl = f_energies/1e1
+    ampl = f_energies/2.
 
 
     # put flares at random places throughout light curve
