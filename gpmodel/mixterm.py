@@ -5,6 +5,9 @@ from celerite import terms
 class MixtureOfSHOsTerm(terms.SHOTerm):
     parameter_names = ("log_a", "log_Q1", "mix_par", "log_Q2", "log_P")
 
+    def __repr__(self):
+        return "MixtureOfSHOserm({0.log_a}, {0.log_Q1}, {0.mix_par}, {0.log_Q2}, {0.log_P})".format(self)
+
     def get_real_coefficients(self, params):
         return np.empty(0), np.empty(0)
 
