@@ -70,7 +70,7 @@ def grad_neg_log_like(params, y, gp, m):
 
 # Iterate on GP model to do fitting with clipping
 # uses simple minimization for ease
-def iterate_gp(t, y, yerr, period, niter=10, mask=None):
+def iterate_gp(t, y, yerr, period, niter=2, mask=None):
 
     # get the kernel, which makes bounds choices based on period
     min_period = period * 0.8
@@ -112,10 +112,11 @@ def iterate_gp(t, y, yerr, period, niter=10, mask=None):
 
     # final fit
     fit_t, fit_y, fit_yerr = t[m], y[m], yerr[m]
+    # recompute (in case ran through all iters)
+    gp.compute(fit_t, fit_yerr) 
 
     gp.thaw_parameter("kernel:terms[2]:log_P")
     print(gp.get_parameter_dict()) 
-
     return gp, fit_y
 
  
@@ -143,7 +144,6 @@ def log_prob(params, fit_y, gp, logperiod):
     lp = gp.log_prior() + additional_prior(params, p_current, logperiod)
     if not np.isfinite(lp):
         return -np.inf
-
     return lp + gp.log_likelihood(fit_y)
 
     
@@ -186,7 +186,7 @@ def emcee_gp(gp, fit_y, short_chain=True):
     sampler.reset()
     if short_chain:
         sampler.run_mcmc(pos, 1000);    
-
+        
     # Get the posterior
     mle = sampler.flatchain[np.argmax(sampler.flatlnprobability)]
     gp.set_parameter_vector(mle)
