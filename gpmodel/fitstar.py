@@ -83,7 +83,6 @@ def iterate_gp(t, y, yerr, period, niter=10, mask=None):
 
     gp = get_rotation_gp(t[m], y[m], yerr[m], period, min_period, max_period)
     gp.freeze_parameter("kernel:terms[2]:log_P")
-    gp.freeze_parameter("kernel:terms[1]:log_sigma")
     
     gp.compute(t[m], yerr[m])
     gp.get_parameter_dict()
@@ -103,7 +102,7 @@ def iterate_gp(t, y, yerr, period, niter=10, mask=None):
         sig = np.sqrt(var + yerr**2)
 
         m0 = y - mu < 1.3 * sig
-        print(m0.sum(), m.sum())
+        #print(m0.sum(), m.sum())
         
         # break if nothing clipped, or keep going
         if np.all(m0 == m) or (np.abs(m0.sum()- m.sum()) < 3):
@@ -115,18 +114,9 @@ def iterate_gp(t, y, yerr, period, niter=10, mask=None):
     fit_t, fit_y, fit_yerr = t[m], y[m], yerr[m]
 
     gp.thaw_parameter("kernel:terms[2]:log_P")
-    bounds = gp.get_parameter_bounds()
-    initial_params = gp.get_parameter_vector()
-    gp.compute(fit_t, fit_y)
-    soln = minimize(neg_log_like, initial_params, jac=grad_neg_log_like,
-                    method="L-BFGS-B", bounds=bounds, args=(y, gp, m))
-    gp.set_parameter_vector(soln.x)
-    initial_params = soln.x
-
     print(gp.get_parameter_dict()) 
-    mask = m
 
-    return gp, soln, fit_y
+    return gp, fit_y
 
  
 # The priors: a multimodal prior on the period
@@ -134,11 +124,10 @@ def iterate_gp(t, y, yerr, period, niter=10, mask=None):
 # does not include period, as bounds are None)
 def additional_prior(params, p, logperiod):
     
-    period = np.exp(logperiod)
-    sigma = 0.2
+    sigma = 0.2 ## approx. 20% error
     
-    logperiod_half = np.log(period)*2.
-    logperiod_twice = np.log(period)/2.
+    logperiod_half = logperiod + np.log(0.5)
+    logperiod_twice = logperiod + np.log(2.)
     gaussian_prior = (-1./2.)*((p - logperiod)/(sigma))**2.
     gaussian_prior_half = (-1./2.)*((p - logperiod_half)/(sigma))**2.
     gaussian_prior_twice = (-1./2.)*((p - logperiod_twice)/(sigma))**2.
@@ -158,24 +147,35 @@ def log_prob(params, fit_y, gp, logperiod):
     return lp + gp.log_likelihood(fit_y)
 
     
-def emcee_gp(gp, soln, fit_y,):
+def emcee_gp(gp, fit_y, short_chain=True):
 
-    ndim = len(soln.x)
+    initial_params = gp.get_parameter_vector()
+    ndim = len(initial_params)
     nwalkers = 32
-    print(gp.get_parameter_dict()    )
     logperiod = gp.get_parameter_dict()['kernel:terms[2]:log_P']
     
     # set up initial positions
-    pos = soln.x + 1e-4 * np.random.randn(nwalkers, ndim)
+    pos = initial_params + 1e-4 * np.random.randn(nwalkers, ndim)
+
+    # but for period start some at the harmonics
+    tmp = [name == 'kernel:terms[2]:log_P' for name in gp.get_parameter_names()]
+    perloc = np.where(tmp)[0][0] ## grab location of the entry for period
+    for i in range(nwalkers):
+        myrand = np.random.uniform()
+        if myrand < 0.25: ## 25% at half the period
+            pos[i][perloc] = logperiod + np.log(0.5)
+        elif myrand < 0.5: ## 25% at twice the period
+            pos[i][perloc] = logperiod + np.log(2)
+      
+    # and make sure none of the walkers start out of range
     lp = np.array( [log_prob(pos_i, fit_y, gp, logperiod) for pos_i in pos] )
-    # and make sure none of them are NaNs
     m = ~np.isfinite(lp)
     while np.any(m):
-        pos[m] = soln.x + 1e-5 * np.random.randn(m.sum(), ndim)
+        pos[m] = initial_params + 1e-5 * np.random.randn(m.sum(), ndim)
         lp[m] = np.array( [log_prob(pos_i, fit_y, gp, logperiod) for pos_i in pos[m]] )
         m = ~np.isfinite(lp)
 
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_prob, args=(fit_y,gp, logperiod))
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_prob, args=[fit_y,gp, logperiod])
     ## note fit_y needs to be in [] if gp is not a param 
     ## in order to convince the mapping to get the right dimens
     
@@ -183,8 +183,9 @@ def emcee_gp(gp, soln, fit_y,):
     pos, _, _ = sampler.run_mcmc(pos, 500)
     
     # Run the real chain
-    #sampler.reset()
-    #sampler.run_mcmc(pos, 1000);    
+    sampler.reset()
+    if short_chain:
+        sampler.run_mcmc(pos, 1000);    
 
     # Get the posterior
     mle = sampler.flatchain[np.argmax(sampler.flatlnprobability)]
@@ -210,11 +211,9 @@ def lc_plot(ax, t_orig, y_orig, mu, std, xlim=None):
 
 def post_plot(ax, dist):
     ax.hist(dist, 50, histtype="step")
-    print ax.get_xlim()
     ylim = ax.get_ylim()
     low, mid, high = np.percentile( dist, [16, 50, 84])
     plt.plot([mid,mid],ylim, c='indianred')
-    print low, mid, high
     for lh in (low, high):
         plt.plot([lh,lh],ylim, ':', c='indianred')
     ax.set_xlabel('Rotation Period (days)', fontsize=14)

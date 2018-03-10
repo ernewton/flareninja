@@ -21,19 +21,22 @@ from mixterm import MixtureOfSHOsTerm
 # stochastic jitter
 #######################
 
+# this should probably be physically motivated
+# based on Kepler spacecraft motions
 def get_basic_kernel(t, y, yerr, period=False):
     if not period:
         period = 0.5
     kernel = terms.SHOTerm(
         log_S0=np.log(np.var(y)),
         log_Q=-np.log(4.0),
-        log_omega0=np.log(2*np.pi/(period*20.)),
+        log_omega0=np.log(2*np.pi/20.),
         bounds=dict(
             log_S0=(-20.0, 10.0),
-            log_omega0=(np.log(2*np.pi/(period*50.)), np.log(2*np.pi/(period*10))),
+            log_omega0=(np.log(2*np.pi/100.), np.log(2*np.pi/(10))),
         ),
     )
     kernel.freeze_parameter('log_Q')
+    ##  tau = 2*np.exp(-1*np.log(4.0))/np.exp(log_omega0)
 
     # Finally some jitter
     ls = np.log(np.median(yerr))
