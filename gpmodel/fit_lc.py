@@ -11,10 +11,10 @@ def one_star(t_orig, y_orig, yerr_orig, name, mask=None):
         mask = np.isfinite(y_orig) & np.isfinite(yerr_orig)
     else:
         mask = mask & np.isfinite(y_orig) & np.isfinite(yerr_orig)
-    t = t_orig[mask]
-    y = y_orig[mask]
-    yerr = yerr_orig[mask]
-
+    
+    f = lambda x: np.ascontiguousarray(x, dtype=np.float64)
+    t, y, yerr = map(f, [t_orig[mask], y_orig[mask], yerr_orig[mask]])
+    
     ###############
     # Do the fitting
     ###############
@@ -22,18 +22,19 @@ def one_star(t_orig, y_orig, yerr_orig, name, mask=None):
     # First get the period from a Lomb-Scargle periodogram
     m = sigma_clip(t,y,yerr) ## do sigma clipping
     period = ls_period(t[m],y[m], debug=False) ## get peak of periodogram
-    print period
+    print("LS period",period)
 
     # Next use simple minimization in order to iterate on
     # GP fits, clipping flares each time
-    gp, soln, fit_y = iterate_gp(t, y, yerr, period, mask=m)
+    gp, fit_y = iterate_gp(t, y, yerr, period, mask=m)
     
     # Next use emcee to fit for the GP a final time
-    gp, sampler = emcee_gp(gp, soln, fit_y)
+    gp, sampler = emcee_gp(gp, fit_y)
 
-    gp.compute(t,yerr)
-    mu, var = gp.predict(y, t, return_var=True)
-    std = np.sqrt(yerr**2 + var)
+    ## do I actually recompute? I think what's currently here is right
+    #gp.compute(t,yerr) 
+    mu, var = gp.predict(fit_y, t_orig[mask], return_var=True)
+    std = np.sqrt(yerr_orig[mask]**2 + var)
     ndim = len(sampler.flatchain[0, :])
 
     ###############
@@ -77,7 +78,7 @@ def one_star(t_orig, y_orig, yerr_orig, name, mask=None):
         xlim = [t[0], t[0]+10*pbest]
         
     # actually make the plots
-    lc_plot(ax1, t, y, mu, std, xlim=xlim)
+    lc_plot(ax1, t_orig[mask], y_orig[mask], mu, std, xlim=xlim)
     post_plot(ax2, pdist)
 
     fig.tight_layout()
@@ -136,7 +137,6 @@ def kic_llc(k, quarter=9): ## 9 or 3!
         hdu_list.close()
 
     qq, = np.where(quarters == 9)
-    print qq
     if len(qq) == 0:
         print("No Q9", k)
         return False

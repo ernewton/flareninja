@@ -43,7 +43,6 @@ def ls_period(t,y, debug=False):
     period = 1.0 / freq[np.argmax(power)]
     
     if debug:
-        print(period)
         plt.figure()
         plt.plot(1.0 / freq, power, "k")
         plt.axvline(period)
@@ -82,11 +81,12 @@ def iterate_gp(t, y, yerr, period, niter=2, mask=None):
         m = np.ones_like(t, dtype=bool)
 
     gp = get_rotation_gp(t[m], y[m], yerr[m], period, min_period, max_period)
+    gp.compute(t[m], yerr[m])
+    print(len(t[m]), np.sum(y[m]), np.sum(yerr[m]))
+    print(gp.log_likelihood(y[m]))
     gp.freeze_parameter("kernel:terms[2]:log_P")
     
-    gp.compute(t[m], yerr[m])
-    gp.get_parameter_dict()
-
+    
     initial_params = gp.get_parameter_vector()
     bounds = gp.get_parameter_bounds()
 
@@ -102,7 +102,7 @@ def iterate_gp(t, y, yerr, period, niter=2, mask=None):
         sig = np.sqrt(var + yerr**2)
 
         m0 = y - mu < 1.3 * sig
-        #print(m0.sum(), m.sum())
+        print(m0.sum(), m.sum())
         
         # break if nothing clipped, or keep going
         if np.all(m0 == m) or (np.abs(m0.sum()- m.sum()) < 3):
@@ -116,7 +116,6 @@ def iterate_gp(t, y, yerr, period, niter=2, mask=None):
     gp.compute(fit_t, fit_yerr) 
 
     gp.thaw_parameter("kernel:terms[2]:log_P")
-    print(gp.get_parameter_dict()) 
     return gp, fit_y
 
  
@@ -132,9 +131,14 @@ def additional_prior(params, p, logperiod):
     gaussian_prior = (-1./2.)*((p - logperiod)/(sigma))**2.
     gaussian_prior_half = (-1./2.)*((p - logperiod_half)/(sigma))**2.
     gaussian_prior_twice = (-1./2.)*((p - logperiod_twice)/(sigma))**2.
-
+ 
+    # but don't let it go too far
+    if (np.abs(p-logperiod)>0.4) & (np.abs(p-logperiod_half)>0.4) & (np.abs(p-logperiod_twice)>0.4):
+        return -np.inf
+ 
     lp = 0.5*gaussian_prior + 0.25*gaussian_prior_half + 0.25*gaussian_prior_twice
     return lp
+
 
 def log_prob(params, fit_y, gp, logperiod):
 
@@ -147,15 +151,15 @@ def log_prob(params, fit_y, gp, logperiod):
     return lp + gp.log_likelihood(fit_y)
 
     
-def emcee_gp(gp, fit_y, short_chain=True):
-
+def emcee_gp(gp, fit_y, to_convergence=False):
+    np.random.seed(82)
     initial_params = gp.get_parameter_vector()
-    ndim = len(initial_params)
-    nwalkers = 32
     logperiod = gp.get_parameter_dict()['kernel:terms[2]:log_P']
+    ndim = len(initial_params)
+    nwalkers = 50
     
     # set up initial positions
-    pos = initial_params + 1e-4 * np.random.randn(nwalkers, ndim)
+    pos = initial_params + 1e-1 * np.random.randn(nwalkers, ndim)
 
     # but for period start some at the harmonics
     tmp = [name == 'kernel:terms[2]:log_P' for name in gp.get_parameter_names()]
@@ -163,15 +167,15 @@ def emcee_gp(gp, fit_y, short_chain=True):
     for i in range(nwalkers):
         myrand = np.random.uniform()
         if myrand < 0.25: ## 25% at half the period
-            pos[i][perloc] = logperiod + np.log(0.5)
+            pos[i][perloc] = logperiod + np.log(0.5) + 1e-1 * np.random.randn()
         elif myrand < 0.5: ## 25% at twice the period
-            pos[i][perloc] = logperiod + np.log(2)
+            pos[i][perloc] = logperiod + np.log(2) + 1e-1 * np.random.randn()
       
     # and make sure none of the walkers start out of range
     lp = np.array( [log_prob(pos_i, fit_y, gp, logperiod) for pos_i in pos] )
     m = ~np.isfinite(lp)
     while np.any(m):
-        pos[m] = initial_params + 1e-5 * np.random.randn(m.sum(), ndim)
+        pos[m] = initial_params + 1e-2 * np.random.randn(m.sum(), ndim)
         lp[m] = np.array( [log_prob(pos_i, fit_y, gp, logperiod) for pos_i in pos[m]] )
         m = ~np.isfinite(lp)
 
@@ -180,14 +184,45 @@ def emcee_gp(gp, fit_y, short_chain=True):
     ## in order to convince the mapping to get the right dimens
     
     # Run the burn-in
+    print("Running burn-in")
     pos, _, _ = sampler.run_mcmc(pos, 500)
     
     # Run the real chain
     sampler.reset()
-    if short_chain:
-        sampler.run_mcmc(pos, 1000);    
+    print("Running chain")
+    sampler.run_mcmc(pos, 2000);    
+    if to_convergence: ## this is culled from dfm/rotate
+        print("Running to convergence")
+        old_tau = np.inf
+        autocorr = []
+        converged = False
+        mciter = 500
+        totiter = 2500
+        for iteration in range(10):
+            pos, _, _ = sampler.run_mcmc(pos, mciter) # emcee3 takes thin_by=10)
+            totiter = totiter + mciter
+
+            # Compute the autocorrelation time so far
+            # Using tol=0 means that we'll always get an estimate even
+            # if it isn't trustworthy
+            # this was my workaround to 
+            tau = sampler.get_autocorr_time(c=0., high=mciter/10.)  
+            autocorr.append(np.mean(tau))
+            print(autocorr[-1])
+
+            # Check convergence
+            converged = np.all(tau * 100 < totiter)
+            converged &= np.all(np.abs(old_tau - tau) / tau < 0.1)
+            if converged:
+                break
+            old_tau = tau
+
+        if converged:
+            print("converged")
+        else:
+            print("not converged")       
         
-    # Get the posterior
+    # Get the posterior, use max likelihood because median could be anywhere
     mle = sampler.flatchain[np.argmax(sampler.flatlnprobability)]
     gp.set_parameter_vector(mle)
 
